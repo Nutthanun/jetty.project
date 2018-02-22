@@ -46,7 +46,7 @@ import javax.servlet.annotation.HandlesTypes;
 import org.eclipse.jetty.annotations.AnnotationParser.Handler;
 import org.eclipse.jetty.plus.annotation.ContainerInitializer;
 import org.eclipse.jetty.plus.webapp.PlusConfiguration;
-import org.eclipse.jetty.util.ConcurrentHashSet;
+import org.eclipse.jetty.util.JavaVersion;
 import org.eclipse.jetty.util.MultiException;
 import org.eclipse.jetty.util.StringUtil;
 import org.eclipse.jetty.util.TypeUtil;
@@ -78,6 +78,7 @@ public class AnnotationConfiguration extends AbstractConfiguration
     public static final String CONTAINER_INITIALIZER_STARTER = "org.eclipse.jetty.containerInitializerStarter";
     public static final String MULTI_THREADED = "org.eclipse.jetty.annotations.multiThreaded";
     public static final String MAX_SCAN_WAIT = "org.eclipse.jetty.annotations.maxWait";
+    
     
     public static final int DEFAULT_MAX_SCAN_WAIT = 60; /* time in sec */  
     public static final boolean DEFAULT_MULTI_THREADED = true;
@@ -395,7 +396,7 @@ public class AnnotationConfiguration extends AbstractConfiguration
     @Override
     public void postConfigure(WebAppContext context) throws Exception
     {
-        ConcurrentHashMap<String, ConcurrentHashSet<String>> classMap = (ClassInheritanceMap)context.getAttribute(CLASS_INHERITANCE_MAP);
+        Map<String, Set<String>> classMap = (ClassInheritanceMap)context.getAttribute(CLASS_INHERITANCE_MAP);
         List<ContainerInitializer> initializers = (List<ContainerInitializer>)context.getAttribute(CONTAINER_INITIALIZERS);
         
         context.removeAttribute(CLASS_INHERITANCE_MAP);
@@ -433,7 +434,11 @@ public class AnnotationConfiguration extends AbstractConfiguration
     protected void scanForAnnotations (WebAppContext context)
     throws Exception
     {
-        AnnotationParser parser = createAnnotationParser();
+        int javaPlatform = 0;
+        Object target = context.getAttribute(JavaVersion.JAVA_TARGET_PLATFORM);
+        if (target!=null)
+            javaPlatform = Integer.valueOf(target.toString());
+        AnnotationParser parser = createAnnotationParser(javaPlatform);
         _parserTasks = new ArrayList<ParserTask>();
 
         long start = 0; 
@@ -500,7 +505,9 @@ public class AnnotationConfiguration extends AbstractConfiguration
                 LOG.debug("Scanned {} in {}ms", p.getResource(), TimeUnit.MILLISECONDS.convert(p.getStatistic().getElapsed(), TimeUnit.NANOSECONDS));
 
             LOG.debug("Scanned {} container path jars, {} WEB-INF/lib jars, {} WEB-INF/classes dirs in {}ms for context {}",
-                    _containerPathStats.getTotal(), _webInfLibStats.getTotal(), _webInfClassesStats.getTotal(),
+                    (_containerPathStats==null?-1:_containerPathStats.getTotal()), 
+                    (_webInfLibStats==null?-1:_webInfLibStats.getTotal()), 
+                    (_webInfClassesStats==null?-1:_webInfClassesStats.getTotal()),
                     elapsedMs,
                     context);
         }
@@ -513,12 +520,13 @@ public class AnnotationConfiguration extends AbstractConfiguration
     
     
     /**
+     * @param javaPlatform The java platform to scan for.
      * @return a new AnnotationParser. This method can be overridden to use a different implementation of
      * the AnnotationParser. Note that this is considered internal API.
      */
-    protected AnnotationParser createAnnotationParser()
+    protected AnnotationParser createAnnotationParser(int javaPlatform)
     {
-        return new AnnotationParser();
+        return new AnnotationParser(javaPlatform);
     }
     
     /**
@@ -610,7 +618,7 @@ public class AnnotationConfiguration extends AbstractConfiguration
                     if (context.getAttribute(CLASS_INHERITANCE_MAP) == null)
                     {
                         //MultiMap<String> map = new MultiMap<>();
-                        ConcurrentHashMap<String, ConcurrentHashSet<String>> map = new ClassInheritanceMap();
+                        Map<String, Set<String>> map = new ClassInheritanceMap();
                         context.setAttribute(CLASS_INHERITANCE_MAP, map);
                         _classInheritanceHandler = new ClassInheritanceHandler(map);
                     }
@@ -944,7 +952,8 @@ public class AnnotationConfiguration extends AbstractConfiguration
         if (_classInheritanceHandler != null)
             handlers.add(_classInheritanceHandler);
 
-        _containerPathStats = new CounterStatistic();
+        if (LOG.isDebugEnabled())
+            _containerPathStats = new CounterStatistic();
 
         for (Resource r : context.getMetaData().getContainerResources())
         {
@@ -953,9 +962,11 @@ public class AnnotationConfiguration extends AbstractConfiguration
             {
                 ParserTask task = new ParserTask(parser, handlers, r);
                 _parserTasks.add(task);  
-                _containerPathStats.increment();
                 if (LOG.isDebugEnabled())
+                {
+                    _containerPathStats.increment();
                     task.setStatistic(new TimeStatistic());
+                }
             }
         } 
     }
@@ -978,14 +989,18 @@ public class AnnotationConfiguration extends AbstractConfiguration
         ArrayList<URI> webInfUris = new ArrayList<URI>();
 
         List<Resource> jars = null;
-        
+
         if (context.getMetaData().getOrdering() != null)
             jars = context.getMetaData().getOrderedWebInfJars();
         else
             //No ordering just use the jars in any order
             jars = context.getMetaData().getWebInfJars();
 
-        _webInfLibStats = new CounterStatistic();
+        if (LOG.isDebugEnabled())
+        {
+            if (_webInfLibStats == null)
+                _webInfLibStats = new CounterStatistic();
+        }
 
         for (Resource r : jars)
         {
@@ -1015,9 +1030,11 @@ public class AnnotationConfiguration extends AbstractConfiguration
                 {
                     ParserTask task = new ParserTask(parser, handlers,r);
                     _parserTasks.add (task);
-                    _webInfLibStats.increment();
                     if (LOG.isDebugEnabled())
+                    {
+                        _webInfLibStats.increment();
                         task.setStatistic(new TimeStatistic());
+                    }
                 }
             }
         }
@@ -1032,7 +1049,7 @@ public class AnnotationConfiguration extends AbstractConfiguration
      * @throws Exception if unable to scan and/or parse
      */
     public void parseWebInfClasses (final WebAppContext context, final AnnotationParser parser)
-    throws Exception
+            throws Exception
     {
         Set<Handler> handlers = new HashSet<Handler>();
         handlers.addAll(_discoverableAnnotationHandlers);
@@ -1040,7 +1057,8 @@ public class AnnotationConfiguration extends AbstractConfiguration
             handlers.add(_classInheritanceHandler);
         handlers.addAll(_containerInitializerAnnotationHandlers);
 
-        _webInfClassesStats = new CounterStatistic();
+        if (LOG.isDebugEnabled())
+            _webInfClassesStats = new CounterStatistic();
 
         for (Resource dir : context.getMetaData().getWebInfClassesDirs())
         {
@@ -1048,9 +1066,11 @@ public class AnnotationConfiguration extends AbstractConfiguration
             {
                 ParserTask task = new ParserTask(parser, handlers, dir);
                 _parserTasks.add(task);
-                _webInfClassesStats.increment();
                 if (LOG.isDebugEnabled())
+                {
+                    _webInfClassesStats.increment();
                     task.setStatistic(new TimeStatistic());
+                }
             }
         }
     }
@@ -1087,7 +1107,7 @@ public class AnnotationConfiguration extends AbstractConfiguration
         return (d!=null && d.getMetaDataComplete() == MetaDataComplete.True);
     }
 
-    public static class ClassInheritanceMap extends ConcurrentHashMap<String, ConcurrentHashSet<String>>
+    public static class ClassInheritanceMap extends ConcurrentHashMap<String, Set<String>>
     {
         
         @Override

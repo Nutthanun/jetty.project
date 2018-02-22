@@ -23,11 +23,14 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -38,13 +41,18 @@ import javax.servlet.ServletContextListener;
 import javax.servlet.ServletException;
 import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
+import javax.servlet.http.HttpSessionEvent;
+import javax.servlet.http.HttpSessionListener;
 
 import org.eclipse.jetty.server.LocalConnector;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.HandlerList;
 import org.eclipse.jetty.server.handler.HotSwapHandler;
+import org.eclipse.jetty.servlet.ErrorPageErrorHandler;
 import org.eclipse.jetty.servlet.ServletContextHandler;
+import org.eclipse.jetty.toolchain.test.MavenTestingUtils;
+import org.eclipse.jetty.util.resource.PathResource;
 import org.eclipse.jetty.util.resource.Resource;
 import org.eclipse.jetty.util.resource.ResourceCollection;
 import org.hamcrest.Matchers;
@@ -53,6 +61,44 @@ import org.junit.Test;
 
 public class WebAppContextTest
 {
+    public class MySessionListener implements HttpSessionListener
+    {
+
+        @Override
+        public void sessionCreated(HttpSessionEvent se)
+        {
+            // TODO Auto-generated method stub
+            
+        }
+
+        @Override
+        public void sessionDestroyed(HttpSessionEvent se)
+        {
+            // TODO Auto-generated method stub
+            
+        }
+        
+    }
+    
+    @Test
+    public void testSessionListeners ()
+    throws Exception
+    {
+        Server server = new Server();
+
+        WebAppContext wac = new WebAppContext();
+
+        wac.setServer(server);
+        server.setHandler(wac);
+        wac.addEventListener(new MySessionListener());
+
+        Collection<MySessionListener> listeners = wac.getSessionHandler().getBeans(org.eclipse.jetty.webapp.WebAppContextTest.MySessionListener.class);
+        assertNotNull(listeners);
+        assertEquals(1, listeners.size());
+    }
+    
+    
+    
     @Test
     public void testConfigurationClassesFromDefault ()
     {
@@ -218,6 +264,34 @@ public class WebAppContextTest
         }
     }
     
+    @Test
+    public void testNullSessionAndSecurityHandler() throws Exception
+    {
+        Server server = new Server(0);
+        HandlerList handlers = new HandlerList();
+        ContextHandlerCollection contexts = new ContextHandlerCollection();
+        WebAppContext context = new WebAppContext(null, null, null, null, null, new ErrorPageErrorHandler(), 
+                                                  ServletContextHandler.NO_SESSIONS|ServletContextHandler.NO_SECURITY);
+        context.setContextPath("/");
+        context.setBaseResource(Resource.newResource("./src/test/webapp"));
+        server.setHandler(handlers);
+        handlers.addHandler(contexts);
+        contexts.addHandler(context);
+
+        LocalConnector connector = new LocalConnector(server);
+        server.addConnector(connector);
+
+        try
+        {
+            server.start();
+            Assert.assertTrue(context.isAvailable());
+        }
+        finally
+        {
+            server.stop();
+        }
+    }
+
     class ServletA extends GenericServlet
     {
         @Override
@@ -340,4 +414,19 @@ public class WebAppContextTest
         
         server.stop();
     }
+
+    @Test
+    public void ordering() throws Exception
+    {
+        Path testWebappDir = MavenTestingUtils.getProjectDirPath("src/test/webapp");
+        Resource webapp = new PathResource(testWebappDir);
+        WebAppContext context = new WebAppContext();
+        context.setBaseResource(webapp);
+        context.setContextPath("/test");
+        context.setServer(new Server());
+        new MetaInfConfiguration().preConfigure(context);
+        assertEquals(Arrays.asList("acme.jar", "alpha.jar", "omega.jar"),
+            context.getMetaData().getWebInfJars().stream().map(r -> r.getURI().toString().replaceFirst(".+/", "")).collect(Collectors.toList()));
+    }
+
 }

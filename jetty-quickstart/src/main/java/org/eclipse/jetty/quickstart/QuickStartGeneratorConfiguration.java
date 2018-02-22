@@ -72,6 +72,10 @@ import org.eclipse.jetty.xml.XmlAppendable;
  * <p>
  * Generate an effective web.xml from a WebAppContext, including all components 
  * from web.xml, web-fragment.xmls annotations etc.
+ * <p>
+ * If generating quickstart for a different java platform than the current running
+ * platform, then the org.eclipse.jetty.annotations.javaTargetPlatform attribute
+ * should be set on the Context with the platform number of the target JVM (eg 8).
  */
 public class QuickStartGeneratorConfiguration extends AbstractConfiguration
 {
@@ -172,11 +176,13 @@ public class QuickStartGeneratorConfiguration extends AbstractConfiguration
         MetaData md = context.getMetaData();
 
         Map<String, String> webappAttr = new HashMap<>();
+        int major = context.getServletContext().getEffectiveMajorVersion();
+        int minor = context.getServletContext().getEffectiveMinorVersion();
         webappAttr.put("xmlns","http://xmlns.jcp.org/xml/ns/javaee");
         webappAttr.put("xmlns:xsi","http://www.w3.org/2001/XMLSchema-instance");
-        webappAttr.put("xsi:schemaLocation","http://xmlns.jcp.org/xml/ns/javaee http://xmlns.jcp.org/xml/ns/javaee/web-app_3_1.xsd");
+        webappAttr.put("xsi:schemaLocation","http://xmlns.jcp.org/xml/ns/javaee http://xmlns.jcp.org/xml/ns/javaee/web-app_"+(major+"_"+minor)+".xsd");
         webappAttr.put("metadata-complete","true");
-        webappAttr.put("version",context.getServletContext().getEffectiveMajorVersion()+"."+context.getServletContext().getEffectiveMinorVersion());        
+        webappAttr.put("version",major+"."+minor);        
 
         out.openTag("web-app",webappAttr);
         if (context.getDisplayName() != null)

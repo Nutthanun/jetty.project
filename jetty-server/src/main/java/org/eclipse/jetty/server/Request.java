@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import javax.servlet.AsyncContext;
@@ -56,6 +57,7 @@ import javax.servlet.ServletRequestAttributeListener;
 import javax.servlet.ServletRequestWrapper;
 import javax.servlet.ServletResponse;
 import javax.servlet.http.Cookie;
+import javax.servlet.http.HttpServletMapping;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
@@ -63,7 +65,6 @@ import javax.servlet.http.HttpUpgradeHandler;
 import javax.servlet.http.MappingMatch;
 import javax.servlet.http.Part;
 import javax.servlet.http.PushBuilder;
-import javax.servlet.http.ServletMapping;
 
 import org.eclipse.jetty.http.BadMessageException;
 import org.eclipse.jetty.http.HostPortHttpField;
@@ -79,6 +80,7 @@ import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.http.MetaData;
 import org.eclipse.jetty.http.MimeTypes;
 import org.eclipse.jetty.http.pathmap.PathSpec;
+import org.eclipse.jetty.io.RuntimeIOException;
 import org.eclipse.jetty.http.pathmap.ServletPathSpec;
 import org.eclipse.jetty.server.handler.ContextHandler;
 import org.eclipse.jetty.server.handler.ContextHandler.Context;
@@ -131,6 +133,9 @@ import org.eclipse.jetty.util.log.Logger;
  * {@link ContextHandler#getMaxFormContentSize()} or if there is no context then the "org.eclipse.jetty.server.Request.maxFormContentSize" {@link Server}
  * attribute. The number of parameters keys is limited by {@link ContextHandler#getMaxFormKeys()} or if there is no context then the
  * "org.eclipse.jetty.server.Request.maxFormKeys" {@link Server} attribute.
+ * </p>
+ * <p>If IOExceptions or timeouts occur while reading form parameters, these are thrown as unchecked Exceptions: ether {@link RuntimeIOException},
+ * {@link BadMessageException} or {@link RuntimeException} as appropriate.</p>
  */
 public class Request implements HttpServletRequest
 {
@@ -189,7 +194,7 @@ public class Request implements HttpServletRequest
     private Authentication _authentication;
     private String _characterEncoding;
     private ContextHandler.Context _context;
-    private CookieCutter _cookies;
+    private Cookies _cookies;
     private DispatcherType _dispatcherType;
     private int _inputState = __NONE;
     private MultiMap<String> _queryParameters;
@@ -206,7 +211,6 @@ public class Request implements HttpServletRequest
     private long _timeStamp;
     private MultiPartInputStreamParser _multiPartInputStream; //if the request is a multi-part mime
     private AsyncContextState _async;
-    private HttpFields _trailers;
 
     /* ------------------------------------------------------------ */
     public Request(HttpChannel channel, HttpInput input)
@@ -223,13 +227,14 @@ public class Request implements HttpServletRequest
     }
 
     /* ------------------------------------------------------------ */
-    // TODO @Override
+    @Override
     public Map<String,String> getTrailerFields()
     {
-        if (_trailers==null)
+        HttpFields trailersFields = getTrailerHttpFields();
+        if (trailersFields==null)
             return Collections.emptyMap();
         Map<String,String> trailers = new HashMap<>();
-        for (HttpField field : _trailers)
+        for (HttpField field : trailersFields)
         {
             String key = field.getName().toLowerCase();
             String value = trailers.get(key);
@@ -238,9 +243,12 @@ public class Request implements HttpServletRequest
         return trailers;
     }
 
+    /* ------------------------------------------------------------ */
     public HttpFields getTrailerHttpFields()
     {
-        return _trailers;
+        MetaData.Request metadata=_metaData;
+        Supplier<HttpFields> trailers = metadata==null?null:metadata.getTrailerSupplier();
+        return trailers==null?null:trailers.get();
     }
 
     /* ------------------------------------------------------------ */
@@ -273,7 +281,7 @@ public class Request implements HttpServletRequest
     public PushBuilder newPushBuilder()
     {
         if (!isPushSupported())
-            throw new IllegalStateException(String.format("%s,push=%b,channel=%s", this, isPush(), getHttpChannel()));
+            return null;
 
         HttpFields fields = new HttpFields(getHttpFields().size()+5);
 
@@ -518,10 +526,8 @@ public class Request implements HttpServletRequest
         }
         catch (IOException e)
         {
-            if (LOG.isDebugEnabled())
-                LOG.warn(e);
-            else
-                LOG.warn(e.toString());
+            LOG.debug(e);
+            throw new RuntimeIOException(e);
         }
     }
 
@@ -534,8 +540,8 @@ public class Request implements HttpServletRequest
         }
         catch (IOException | ServletException e)
         {
-            LOG.warn(e);
-            throw new RuntimeException(e);
+            LOG.debug(e);
+            throw new RuntimeIOException(e);
         }
     }
 
@@ -751,7 +757,7 @@ public class Request implements HttpServletRequest
         for (String c : metadata.getFields().getValuesList(HttpHeader.COOKIE))
         {
             if (_cookies == null)
-                _cookies = new CookieCutter(getHttpChannel().getHttpConfiguration().getCookieCompliance());
+                _cookies = new Cookies(getHttpChannel().getHttpConfiguration().getCookieCompliance());
             _cookies.addCookieField(c);
         }
 
@@ -1365,7 +1371,7 @@ public class Request implements HttpServletRequest
     {
         MetaData.Request metadata = _metaData;
         String name = metadata==null?null:metadata.getURI().getHost();
-        
+
         // Return already determined host
         if (name != null)
             return name;
@@ -1562,7 +1568,7 @@ public class Request implements HttpServletRequest
     {
         return _originalUri;
     }
-    
+
     /* ------------------------------------------------------------ */
     /**
      * @param uri the URI to set
@@ -1730,10 +1736,10 @@ public class Request implements HttpServletRequest
         _originalUri = uri.isAbsolute() && request.getHttpVersion()!=HttpVersion.HTTP_2
             ? uri.toString()
             : uri.getPathQuery();
-        
+
         if (uri.getScheme()==null)
             uri.setScheme("http");
-        
+
         if (!uri.hasAuthority())
         {
             HttpField field = getHttpFields().getField(HttpHeader.HOST);
@@ -1743,7 +1749,7 @@ public class Request implements HttpServletRequest
                 uri.setAuthority(authority.getHost(),authority.getPort());
             }
         }
-        
+
         String encoded = uri.getPath();
         String path;
         if (encoded==null)
@@ -1844,7 +1850,6 @@ public class Request implements HttpServletRequest
         _multiPartInputStream = null;
         _remote=null;
         _input.recycle();
-        _trailers = null;
     }
 
     /* ------------------------------------------------------------ */
@@ -2027,7 +2032,7 @@ public class Request implements HttpServletRequest
     public void setCookies(Cookie[] cookies)
     {
         if (_cookies == null)
-            _cookies = new CookieCutter(getHttpChannel().getHttpConfiguration().getCookieCompliance());
+            _cookies = new Cookies(getHttpChannel().getHttpConfiguration().getCookieCompliance());
         _cookies.setCookies(cookies);
     }
 
@@ -2214,11 +2219,6 @@ public class Request implements HttpServletRequest
         _scope = scope;
     }
 
-    public void setTrailers(HttpFields trailers)
-    {
-        _trailers = trailers;
-    }
-
     /* ------------------------------------------------------------ */
     @Override
     public AsyncContext startAsync() throws IllegalStateException
@@ -2244,7 +2244,15 @@ public class Request implements HttpServletRequest
             _async=new AsyncContextState(state);
         AsyncContextEvent event = new AsyncContextEvent(_context,_async,state,this,servletRequest,servletResponse);
         event.setDispatchContext(getServletContext());
-        event.setDispatchPath(URIUtil.encodePath(URIUtil.addPaths(getServletPath(),getPathInfo())));
+
+        String uri = ((HttpServletRequest)servletRequest).getRequestURI();
+        if (_contextPath!=null && uri.startsWith(_contextPath))
+            uri = uri.substring(_contextPath.length());
+        else
+            // TODO probably need to strip encoded context from requestURI, but will do this for now:
+            uri = URIUtil.encodePath(URIUtil.addPaths(getServletPath(),getPathInfo()));
+
+        event.setDispatchPath(uri);
         state.startAsync(event);
         return _async;
     }
@@ -2440,8 +2448,7 @@ public class Request implements HttpServletRequest
     {
         throw new ServletException("HttpServletRequest.upgrade() not supported in Jetty");
     }
-    
-    
+
     public void setPathSpec(PathSpec pathSpec)
     {
         _pathSpec = pathSpec;
@@ -2451,10 +2458,9 @@ public class Request implements HttpServletRequest
     {
         return _pathSpec;
     }
-    
-    
-    // TODO replace with overriden version from API
-    public ServletMapping getMapping()
+
+    @Override
+    public HttpServletMapping getHttpServletMapping()
     {
         final PathSpec pathSpec = _pathSpec;
         final MappingMatch match;
@@ -2473,7 +2479,7 @@ public class Request implements HttpServletRequest
                     break;
                 case EXACT:
                     match = MappingMatch.EXACT;
-                    mapping = _servletPath;
+                    mapping = _servletPath.startsWith("/")?_servletPath.substring(1):_servletPath;
                     break;
                 case SUFFIX_GLOB:
                     match = MappingMatch.EXTENSION;
@@ -2495,12 +2501,12 @@ public class Request implements HttpServletRequest
             match = null;
             mapping = _servletPath;
         }
-        
-        return new ServletMapping()
+
+        return new HttpServletMapping()
         {
             @Override
             public String getMatchValue()
-            {   
+            {
                 return mapping;
             }
 

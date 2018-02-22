@@ -98,7 +98,8 @@ public class JstlTest
     @AfterClass
     public static void stopServer() throws Exception
     {
-        server.stop();
+        if (server != null)
+            server.stop();
     }
     
     @Test
@@ -130,7 +131,6 @@ public class JstlTest
     }
     
     @Test
-    @Ignore
     public void testCatchTaglib() throws IOException
     {
         HttpURLConnection http = (HttpURLConnection) baseUri.resolve("/catch-taglib.jsp").toURL().openConnection();

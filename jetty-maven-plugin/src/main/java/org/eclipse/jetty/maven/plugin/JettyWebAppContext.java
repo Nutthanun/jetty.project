@@ -66,16 +66,20 @@ public class JettyWebAppContext extends WebAppContext
     private static final String DEFAULT_CONTAINER_INCLUDE_JAR_PATTERN = ".*/javax.servlet-[^/]*\\.jar$|.*/servlet-api-[^/]*\\.jar$|.*javax.servlet.jsp.jstl-[^/]*\\.jar|.*taglibs-standard-impl-.*\\.jar";
     private static final String WEB_INF_CLASSES_PREFIX = "/WEB-INF/classes";
     private static final String WEB_INF_LIB_PREFIX = "/WEB-INF/lib";
-    
+
     private File _classes = null;
     private File _testClasses = null;
-    private final List<File> _webInfClasses = new ArrayList<File>();
-    private final List<File> _webInfJars = new ArrayList<File>();
+    private final List<File> _webInfClasses = new ArrayList<>();
+    private final List<File> _webInfJars = new ArrayList<>();
     private final Map<String, File> _webInfJarMap = new HashMap<String, File>();
-    private List<File> _classpathFiles;  //webInfClasses+testClasses+webInfJars
+    private List<File> _classpathFiles; //webInfClasses+testClasses+webInfJars
     private String _jettyEnvXml;
     private List<Overlay> _overlays;
 
+   
+    
+ 
+    
     /**
      * Set the "org.eclipse.jetty.server.webapp.ContainerIncludeJarPattern" with a pattern for matching jars on
      * container classpath to scan. This is analogous to the WebAppContext.setAttribute() call.
@@ -266,8 +270,15 @@ public class JettyWebAppContext extends WebAppContext
     
     /* ------------------------------------------------------------ */
     public Resource getQuickStartWebDescriptor ()
+    throws Exception
     {
-        return (Resource)getAttribute(QuickStartConfiguration.QUICKSTART_WEB_XML);
+        Object o = getAttribute(QuickStartConfiguration.QUICKSTART_WEB_XML);
+        if (o == null)
+            return null;
+        else if (o instanceof Resource)
+            return (Resource)o;
+        else
+            return Resource.newResource((String)o);
     }
     
     /* ------------------------------------------------------------ */
@@ -294,7 +305,13 @@ public class JettyWebAppContext extends WebAppContext
     {
         return _webInfJars;
     }
-    
+
+    /* ------------------------------------------------------------ */
+    public List<File> getWebInfClasses()
+    {
+        return _webInfClasses;
+    }
+
     /* ------------------------------------------------------------ */
     public void setGenerateQuickStart (boolean quickStart)
     {
@@ -308,16 +325,21 @@ public class JettyWebAppContext extends WebAppContext
     }
     
    
+    
+
+
 
     /* ------------------------------------------------------------ */
     @Override
     public void doStart () throws Exception
     {
+
         //choose if this will be a quickstart or normal start
         if (!isGenerateQuickStart() && getQuickStartWebDescriptor() != null)
         {
             MavenQuickStartConfiguration quickStart = new MavenQuickStartConfiguration();
             quickStart.setMode(Mode.QUICKSTART);
+            quickStart.setQuickStartWebXml(getQuickStartWebDescriptor());
             addConfiguration(quickStart);
         }
         else if (isGenerateQuickStart())
@@ -352,7 +374,7 @@ public class JettyWebAppContext extends WebAppContext
             _webInfClasses.add(_classes);
         
         // Set up the classpath
-        _classpathFiles = new ArrayList<File>();
+        _classpathFiles = new ArrayList<>();
         _classpathFiles.addAll(_webInfClasses);
         _classpathFiles.addAll(_webInfJars);
 
@@ -378,10 +400,9 @@ public class JettyWebAppContext extends WebAppContext
     protected void loadConfigurations()
     {
         super.loadConfigurations();
-        
         try
         {
-            //inject configurations with config from maven plugin    
+            //inject configurations with config from maven plugin
             for (Configuration c:getWebAppConfigurations())
             {
                 if (c instanceof EnvConfiguration && getJettyEnvXml() != null)
